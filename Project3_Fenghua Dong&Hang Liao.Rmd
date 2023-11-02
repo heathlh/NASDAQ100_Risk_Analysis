@@ -1,0 +1,314 @@
+---
+title: "Project3_Fenghua_Dong_Hang_Liao"
+author: "Fenghua Dong & Hang Liao"
+date: '2022-07-28'
+output: 
+  html_document:
+    toc: true
+    # toc_depth: 1
+    toc_float: true
+    number_sections: true
+    
+---
+
+```{r setup, include=FALSE}
+
+# Options 
+knitr::opts_chunk$set(echo = TRUE)
+
+# Packages 
+library(tidyverse)
+library(car)
+library(tseries)
+
+# Set seed
+set.seed(151)
+
+```
+# Introduction
+This project is to perform risk analysis for the Nasdaq-100 Index.
+It will try volatility modeling, bootstrap, and Monte-Carlo simulation using methods introduced in class. 
+
+# Question 2
+
+## Question 2A
+
+We notice that the line plot of daily log returns of the NASDAQ100 is centered about 0. We also notice that there is far more variability after during times of economic uncertainty (e.g., great recession and covid 19 financial crisis)
+```{r}
+# Read in data
+nasdaq_raw <- read_csv("NASDAQ100.csv")
+
+# Calculate log returns for NASDAQ100
+nasdaq_clean <- nasdaq_raw %>%
+  rename(close_price = NASDAQ100) %>% 
+  dplyr::arrange(DATE) %>% 
+  mutate(
+    date = as.Date(DATE),
+    close_price =  as.numeric(close_price),
+    # Take the daily log return 
+    daily_ret = log(close_price/lag(close_price))
+  ) %>%
+  filter(
+   !is.na(daily_ret)
+  )
+
+# Plot daily log returns
+p1 <- ggplot(nasdaq_clean, aes(x = date, y = daily_ret)) + 
+  geom_line() + 
+  labs(
+    x = "Date",
+    y = "Daily Log Returns",
+    title = "Daily Log Returns of NASDAQ100",
+    caption = "Source: FRED"
+  ) 
+
+p1
+
+```
+
+
+## Question 2B 
+
+We notice the histogram of daily log returns does indeed look normal. We will use a QQ plot to test whether or not it follows a normal distribution. 
+
+The QQ plot suggests that log returns of the NASDAQ100 do not closely follow a normal distribution because the data have more extreme values than would be expected from a normal distribution. 
+
+Similarly the p-value returned from the Jaque Bera test indicates we reject the null hypothesis that the data is normally distributed. 
+
+```{r}
+
+# Plot histogram of daily log returns 
+p2 <- ggplot(nasdaq_clean, aes(x = daily_ret)) + 
+  geom_histogram(binwidth = .005) + 
+  labs(
+    x = "Daily log returns",
+    title = "Histogram of Daily Log Returns of NASDAQ100",
+    caption = "Source: FRED"
+  )
+
+p2
+
+# Produce QQ plot of NASDAQ log change 
+qqnorm(nasdaq_clean$daily_ret)
+
+# Jarque Bera test
+# null hypothesis: the data is normally distributed
+# alternative hypothesis: the data is not normally distributed
+jarque.bera.test(nasdaq_clean$daily_ret)
+
+```
+
+# Question 3 
+
+## Question 3A - 3C
+
+Demonstrated in code
+
+```{r}
+
+# Calculate daily returns for NASDAQ 100
+nasdaq_clean <- nasdaq_raw %>% 
+  rename(close_price = NASDAQ100) %>% 
+  mutate(
+    date = as.Date(DATE),
+    close_price =  as.numeric(close_price),
+    # Take the daily log return 
+    daily_ret = log(close_price/lag(close_price))
+  ) %>%
+  filter(
+    date >= as.Date("2021-07-01") &
+    date <= as.Date("2021-12-31")
+  ) %>% 
+  filter(
+    !is.na(daily_ret)
+  )
+
+#the datarame stores the 1% VaR
+VaR_df <- tibble(
+  id = NA, VaR = NA
+)
+
+for(i in 1:1000){
+
+  # Sample NASDAQ
+  nasdaq_sample <- nasdaq_clean %>% 
+    # Sample 200 rows with replacement 
+    sample_n(200, replace = T) %>% 
+    mutate(
+      # Percent returns 
+      VaR = daily_ret * 100,
+      # Create sample id
+      id = i
+    ) %>% 
+    arrange(VaR) %>% 
+    # Filter for second row (99% confidence interval)
+    filter(row_number() == 2) %>% 
+    select(id, VaR) 
+  
+  # Add one row (1% VaR) for each iteration 
+  VaR_df <- bind_rows(VaR_df, nasdaq_sample)
+}
+
+# Remove first row (NA row)
+VaR_df <- VaR_df %>% 
+  filter(!is.na(VaR))
+
+# Calculate mean an interquartile range 
+summary(VaR_df)
+
+# Calculate standard deviation 
+sd(VaR_df$VaR, na.rm = T)
+
+# Plot histogram of 1% VaR estimates 
+p3 <- ggplot(VaR_df, aes(x = VaR)) + 
+  geom_histogram(bins = 5) + 
+  labs(
+    x = "Value at Risk (VaR)", 
+    y = "Observations",
+    title = "Histogram of Historical VaR "
+  )
+
+p3
+
+```
+
+## Question 3D
+
+We calculated the historical/bootstrap 1% VaR estimate. We found that the 1% VaR of the NASDAQ over this period was 2.685%. The interquartile range is .251%. The standard deviation was 0.272%.
+
+
+# Question 4
+
+## Question 4A - 4D
+
+Demonstrated in code
+
+```{r}
+
+nasdaq_clean <- nasdaq_raw %>% 
+  rename(close_price = NASDAQ100) %>% 
+  mutate(
+    date = as.Date(DATE),
+    close_price =  as.numeric(close_price),
+    # Take the daily log return 
+    daily_ret = log(close_price/lag(close_price)),
+    VaR = daily_ret * 100
+  ) %>%
+  filter(
+    date >= as.Date("2021-07-01") &
+    date <= as.Date("2021-12-31")
+  ) %>% 
+  filter(
+    !is.na(daily_ret)
+  )
+
+nasdaq_mean <- mean(nasdaq_clean$VaR)
+nasdaq_sd <- sd(nasdaq_clean$VaR)
+
+VaR_MonteCarlo_df <- tibble(
+  id = NA,
+  VaR = NA 
+)
+
+# repeat 1000 times
+for(i in 1:1000){
+  
+  VaR_sample <- tibble(
+      # Use mean and sd of daily log returns over last 6 months to construct normal
+      # distribution. Sample 200 from distribution 
+      VaR = rnorm(200, mean = nasdaq_mean, sd = nasdaq_sd),
+      id = i
+    ) %>% 
+    arrange(VaR) %>% 
+    # Filter for 99% confidence internal
+    filter(row_number() == 2)
+  
+  VaR_MonteCarlo_df <- bind_rows(VaR_MonteCarlo_df, VaR_sample)
+  
+}
+
+# Remove missing values (NA row)
+VaR_MonteCarlo_df <- VaR_MonteCarlo_df %>% 
+  filter(!is.na(VaR))
+
+# Calculate mean an interquartile range 
+summary(VaR_MonteCarlo_df)
+
+# Calculate standard deviation 
+sd(VaR_MonteCarlo_df$VaR, na.rm = T)
+
+# Plot histogram of 1% VaR estimates 
+p4 <- ggplot(VaR_MonteCarlo_df, aes(x = VaR)) + 
+  geom_histogram(bins = 5) + 
+  labs(
+    x = "Value at Risk (VaR)", 
+    y = "Observations",
+    title = "Histogram of Monte-Carlo VaR "
+  )
+
+p4
+
+```
+
+## Question 4E 
+
+We calculated the Monte-Carlo1% VaR estimate. The mean of the 1000 1% VaR simulations was -2.286%. The interquartile range was 0.382%. The standard deviation was  0.280%. 
+
+
+# Question 5 
+
+We notice that 4e and 3d are very different. The VaR estimate from 3d (bootstrap) is -2.865 and the VAR estimate from 4e (monte-carlo) is -2.286. If We were managers of a large fund We would be very concerned because a .5% difference could means hundreds of millions in losses. 
+
+# Question 6 
+
+The 1% VaR is 5.19%, which is much closer to the historical/bootstap 1% VaR estimate than the Monte-Carlo VaR estimate.
+
+```{r }
+
+# Calculate pct returns for NASDAQ100
+nasdaq_clean <- nasdaq_raw %>% 
+  rename(close_price = NASDAQ100) %>% 
+  mutate(
+    date = as.Date(DATE),
+    close_price =  as.numeric(close_price),
+    # Take the daily log return 
+    daily_ret = log(close_price/lag(close_price)),
+  ) %>%
+  filter(
+    date >= as.Date("2022-01-01") &  
+    !is.na(daily_ret)
+  ) %>% 
+  filter(row_number() %in% 1:100)
+
+VaR_today <- nasdaq_clean %>% 
+  arrange(daily_ret) %>% 
+  filter(row_number() == 2) %>% 
+  mutate(VaR = daily_ret * 100) %>% 
+  select(date, VaR)
+
+```
+
+# Question 7 
+
+An alternative We attempted used the period January 1st, 2021 to December 31st 2021 and sampled 300 observations with replacement from the sample. The historical 1% VaR estimated decreased to 3.093%. The Monte-Carlo 1% VaR estimate also decreased to -2.672%. 
+
+# Question 8
+
+```{r}
+#review plot in 2.1
+p1
+
+#We can tell from plot of Question 2a that before 2010 and right after 2020 are more volatile periods.
+#And other times are relatively calmer, especially during 2013-2015.
+```
+
+Two simple but competing models have been dominant for decades: 
+the Heston model, introduced in 1993, 
+and the multiplicative model, which dates back to 1990.
+
+## Heston Model
+In finance, the Heston model, named after Steven L. Heston, is a mathematical model that describes the evolution of the volatility of an underlying asset. It is a stochastic volatility model: such a model assumes that the volatility of the asset is not constant, nor even deterministic, but follows a random process.
+
+## Multiplicative model
+This is a description of the effect of two or more predictor variables on an outcome variable that allows for interaction effects among the predictors. This is in contrast to an additive model, which sums the individual effects of several predictors on an outcome.
+
